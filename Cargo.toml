@@ -1,17 +1,22 @@
 [package]
-authors = ["Jorge Aparicio <jorge@japaric.io>"]
+authors = ["James", "Wes"]
 categories = ["embedded", "no-std"]
-description = "A template for building applications for ARM Cortex-M microcontrollers"
-keywords = ["arm", "cortex-m", "template"]
+description = "An STM32F3DISCOVERY based stand up picker"
+keywords = ["arm", "cortex-m"]
 license = "MIT OR Apache-2.0"
-name = "cortex-m-quickstart"
-repository = "https://github.com/japaric/cortex-m-quickstart"
+name = "standup-picker"
+repository = "https://github.com/wezm/standup-picker"
 version = "0.1.5"
 
 [dependencies]
+cast = { version = "0.2.0", default-features = false }
 cortex-m = "0.2.6"
 cortex-m-rt = "0.2.0"
+cortex-m-rtfm = "0.1.0"
+f3 = "0.4.1"
+
+[profile]
 
 [profile.release]
-lto = true
 debug = true
+lto = true
