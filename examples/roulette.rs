@@ -25,7 +25,7 @@ use f3::timer::Timer;
 use rtfm::{Local, P0, P1, P2, T0, T1, T2, TMax};
 
 // CONFIGURATION
-const FREQUENCY: u32 = 4; // Hz
+const FREQUENCY: u32 = 5 * 4; // Hz
 
 // RESOURCES
 peripherals!(stm32f30x, {
@@ -47,16 +47,19 @@ peripherals!(stm32f30x, {
     },
     EXTI: Peripheral {
         register_block: Exti,
-        ceiling: C2,
+        ceiling: C1,
     },
-    // SYSCFG: Peripheral {
-    //     register_block: Syscfg,
-    //     ceiling: C0,
-    // },
+    DWT: Peripheral {
+        register_block: Dwt,
+        ceiling: C0,
+    },
 });
 
 // INITIALIZATION PHASE
 fn init(ref priority: P0, threshold: &TMax) {
+    let dwt = DWT.access(priority, threshold);
+    dwt.enable_cycle_counter();
+
     let gpioe = GPIOE.access(priority, threshold);
     let rcc = RCC.access(priority, threshold);
     let tim7 = TIM7.access(priority, threshold);
@@ -86,37 +89,32 @@ fn init(ref priority: P0, threshold: &TMax) {
         // syscfg.exticr1.modify(|_, w| w.exti0().bits(
     }
 
+
+    let cycle_count = dwt.cyccnt.read();
+    hprintln!("cycle count {}", cycle_count);
+
     led::init(&gpioe, &rcc);
     timer.init(&rcc, FREQUENCY);
-    timer.resume();
 }
 
 // IDLE LOOP
 fn idle(priority: P0, threshold: T0) -> ! {
     // Sleep
     loop {
-        // rtfm::wfi();
-
-        // Sample button
-        let gpioa = GPIOA.access(&priority, &threshold);
-        let button = gpioa.idr.read().idr0().bits();
-        if button != 0 {
-            // Button is pressed
-            hprintln!("button pressed");
-        }
+        rtfm::wfi();
     }
 }
 
 // TASKS
 tasks!(stm32f30x, {
-    roulette: Task {
-        interrupt: Tim7,
+    button: Task {
+        interrupt: Exti0,
         priority: P1,
         enabled: true,
     },
-    button: Task {
-        interrupt: Exti0,
-        priority: P2,
+    roulette: Task {
+        interrupt: Tim7,
+        priority: P1,
         enabled: true,
     },
 });
@@ -144,12 +142,16 @@ fn roulette(mut task: Tim7, ref priority: P1, ref threshold: T1) {
     }
 }
 
-fn button(task: Exti0, ref priority: P2, ref threshold: T2) {
-    // Clear pending interrupt flag
+fn button(task: Exti0, ref priority: P1, ref threshold: T1) {
+    // Clear pending interrupt flag (by writing 1 to it)
     unsafe {
         let exti = EXTI.access(priority, threshold);
-        exti.pr1.modify( |_, w| w.pr0().bits(0));
+        exti.pr1.modify( |_, w| w.pr0().bits(1));
     }
 
     hprintln!("button pressed in exti0");
+
+    let tim7 = TIM7.access(priority, threshold);
+    let timer = Timer(&tim7);
+    timer.resume();
 }
