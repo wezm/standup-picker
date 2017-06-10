@@ -19,13 +19,35 @@ extern crate f3;
 
 use cast::{u8, usize};
 use f3::led::{self, LEDS};
-use f3::stm32f30x::interrupt::{Tim7, Exti0};
+use f3::stm32f30x::interrupt::{Tim7, Exti0, Exti1510};
 use f3::stm32f30x;
 use f3::timer::Timer;
-use rtfm::{Local, P0, P1, P2, T0, T1, T2, TMax};
+use rtfm::{Local, Resource, C1, P0, P1, P2, T0, T1, T2, TMax};
+
+use core::cell::Cell;
 
 // CONFIGURATION
 const FREQUENCY: u32 = 5 * 4; // Hz
+
+// STATE
+enum Mode {
+    Stopped,
+    Running(i32),
+}
+
+struct State {
+    mode: Cell<Mode>
+}
+
+impl State {
+    const fn new() -> Self {
+        State {
+            mode: Cell::new(Mode::Stopped)
+        }
+    }
+}
+
+static SHARED: Resource<State, C1> = Resource::new(State::new());
 
 // RESOURCES
 peripherals!(stm32f30x, {
@@ -35,6 +57,10 @@ peripherals!(stm32f30x, {
     },
     GPIOA: Peripheral {
         register_block: Gpioa,
+        ceiling: C0,
+    },
+    GPIOC: Peripheral {
+        register_block: Gpioc,
         ceiling: C0,
     },
     RCC: Peripheral {
@@ -53,6 +79,10 @@ peripherals!(stm32f30x, {
         register_block: Dwt,
         ceiling: C0,
     },
+    SYSCFG: Peripheral {
+        register_block: Syscfg,
+        ceiling: C0,
+    },
 });
 
 // INITIALIZATION PHASE
@@ -65,10 +95,11 @@ fn init(ref priority: P0, threshold: &TMax) {
     let tim7 = TIM7.access(priority, threshold);
     let timer = Timer(&tim7);
 
-    // Power up PORTA
-    rcc.ahbenr.modify(|_, w| w.iopaen().enabled());
+    // Power up PORTA and PORTC
+    rcc.ahbenr.modify(|_, w| w.iopaen().enabled().iopcen().enabled());
+    rcc.apb2enr.modify(|_, w| w.syscfgen().enabled());
 
-    // Configure pins 8-15 as outputs
+    // Configure PA0 as input
     let gpioa = GPIOA.access(priority, threshold);
     gpioa
         .moder
@@ -78,17 +109,31 @@ fn init(ref priority: P0, threshold: &TMax) {
             },
         );
 
-    // Configure Exti0 to be falling edge triggered on PA0
+    // Configure PC13
+    let gpioc = GPIOC.access(priority, threshold);
+    gpioc
+        .moder
+        .modify(
+            |_, w| {
+                w.moder13().input()
+            },
+        );
 
+    // Configure Exti0 and Exti13 to be falling edge triggered on PA0, PC13 respectively
     unsafe {
         let exti = EXTI.access(priority, threshold);
         exti.imr1.modify( |_, w| w.mr0().bits(1));
         exti.ftsr1.modify( |_, w| w.tr0().bits(1));
 
-        // let syscfg = SYSCFG.access(priority, threshold);
-        // syscfg.exticr1.modify(|_, w| w.exti0().bits(
-    }
+        // Exti13
+        // TODO: Combine with above
+        exti.imr1.modify( |_, w| w.mr13().bits(1));
+        exti.ftsr1.modify( |_, w| w.tr13().bits(1));
 
+        // Set EXTI13 to be triggered by PC13
+        let syscfg = SYSCFG.access(priority, threshold);
+        syscfg.exticr4.modify(|_, w| w.exti13().bits(0b010));
+    }
 
     let cycle_count = dwt.cyccnt.read();
     hprintln!("cycle count {}", cycle_count);
@@ -109,6 +154,11 @@ fn idle(priority: P0, threshold: T0) -> ! {
 tasks!(stm32f30x, {
     button: Task {
         interrupt: Exti0,
+        priority: P1,
+        enabled: true,
+    },
+    button2: Task {
+        interrupt: Exti1510,
         priority: P1,
         enabled: true,
     },
@@ -142,6 +192,37 @@ fn roulette(mut task: Tim7, ref priority: P1, ref threshold: T1) {
     }
 }
 
+fn toggle_timer(timer: &stm32f30x::Tim7) {
+    timer.cr1.modify(|r, w| {
+        if r.cen().is_enabled() {
+            hprintln!("disable timer");
+            w.cen().disabled()
+        }
+        else {
+            hprintln!("enable timer");
+            w.cen().enabled()
+        }
+    });
+}
+
+fn button2(task: Exti1510, ref priority: P1, ref threshold: T1) {
+    // Clear pending interrupt flag (by writing 1 to it)
+    unsafe {
+        let exti = EXTI.access(priority, threshold);
+        exti.pr1.modify( |_, w| w.pr13().bits(1));
+    }
+
+    hprintln!("button pressed in exti13");
+
+    let shared = SHARED.access(priority, threshold);
+    let mut mode = shared.mode.get();
+
+    let tim7 = TIM7.access(priority, threshold);
+    // let timer = Timer(&tim7);
+    // timer.resume();
+    toggle_timer(&tim7);
+}
+
 fn button(task: Exti0, ref priority: P1, ref threshold: T1) {
     // Clear pending interrupt flag (by writing 1 to it)
     unsafe {
@@ -152,6 +233,7 @@ fn button(task: Exti0, ref priority: P1, ref threshold: T1) {
     hprintln!("button pressed in exti0");
 
     let tim7 = TIM7.access(priority, threshold);
-    let timer = Timer(&tim7);
-    timer.resume();
+    // let timer = Timer(&tim7);
+    // timer.resume();
+    toggle_timer(&tim7);
 }
