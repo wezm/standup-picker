@@ -30,6 +30,7 @@ use core::cell::Cell;
 const FREQUENCY: u32 = 5 * 4; // Hz
 
 // STATE
+#[derive(Clone, Copy, Debug)]
 enum Mode {
     Stopped,
     Running(i32),
@@ -212,10 +213,17 @@ fn button2(task: Exti1510, ref priority: P1, ref threshold: T1) {
         exti.pr1.modify( |_, w| w.pr13().bits(1));
     }
 
-    hprintln!("button pressed in exti13");
-
     let shared = SHARED.access(priority, threshold);
     let mut mode = shared.mode.get();
+    hprintln!("{:?}: button pressed in exti13", mode);
+    match mode {
+        Mode::Running(_) => {
+            shared.mode.set(Mode::Stopped);
+        }
+        Mode::Stopped => {
+            shared.mode.set(Mode::Running(100));
+        }
+    }
 
     let tim7 = TIM7.access(priority, threshold);
     // let timer = Timer(&tim7);
